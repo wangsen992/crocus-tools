@@ -24,5 +24,6 @@ dependencies = [
 [project.scripts]
 crocus = "crocus.cli:main"
 
-[tool.setuptools]
-packages = ["crocus"]
+[tool.setuptools.packages.find]
+include = ["crocus*"]
+exclude = ["crocus.tests*"]
