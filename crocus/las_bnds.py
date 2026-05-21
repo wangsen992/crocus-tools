@@ -32,7 +32,7 @@ def get_las_bounding_box(
 
     with open(las_proj_fname) as f:
         las_crs_wkt = f.read()
-    source_crs = CRS.from_wkt(las_crs_wkt)
+    source_crs = CRS.from_proj4(las_crs_wkt)
 
     proj = Transformer.from_crs(source_crs, target_crs)
 
@@ -73,3 +73,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
