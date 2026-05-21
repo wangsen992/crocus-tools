@@ -49,7 +49,7 @@ def subset_building_footprints(
     # gdf = gpd.GeoDataFrame(
     #     geometry=gpd.GeoSeries.from_wkt(gdf["geometry"], crs="latlon"), data=gdf
     # )
-    gdf = gdf.set_crs("latlon")
+    # gdf = gdf.set_crs("latlon")
 
     gdf_subset = gdf.cx[lon0:lon1, lat0:lat1]
     gdf_subset = gdf_subset.to_crs(target_crs)
