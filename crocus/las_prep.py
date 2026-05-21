@@ -31,7 +31,7 @@ def load_projection(proj_fname: str) -> CRS:
 
 def load_influence_region(geojson_path: str) -> tuple:
     """Load influence region and return bounding box."""
-    with open(geojson_path, 'r') as f:
+    with open(geojson_path, "r") as f:
         gs = geojson.load(f)
 
     coords = np.array(gs["features"][0]["geometry"]["coordinates"]).squeeze()
@@ -44,7 +44,7 @@ def transform_las(
     las_path: str,
     target_crs: CRS,
     bounding_box: Optional[tuple] = None,
-    z_scale: float = 0.3048
+    z_scale: float = 1.0,
 ) -> laspy.LasData:
     """
     Transform LAS file to target coordinate system.
@@ -59,34 +59,37 @@ def transform_las(
         Transformed LasData object
     """
     las = laspy.read(str(las_path))
+    las = laspy.convert(las, point_format_id=6)  # added to ensure scan_angle present
     source_crs = las.header.parse_crs()
 
     proj = Transformer.from_crs(source_crs, target_crs)
 
     x, y, z = proj.transform(las.x, las.y, las.z)
     z = z * z_scale
+    classification = las.classification
+    scan_angle = las.scan_angle
 
     if bounding_box:
         x0, y0, x1, y1 = bounding_box
         cond = (x >= x0) & (x <= x1) & (y >= y0) & (y <= y1)
         x, y, z = x[cond], y[cond], z[cond]
+        classification = classification[cond]
+        scan_angle = scan_angle[cond]
 
     new_file = laspy.create(
-        point_format=las.point_format,
-        file_version=las.header.version
+        point_format=las.point_format, file_version=las.header.version
     )
     new_file.x = x
     new_file.y = y
     new_file.z = z
-    new_file.classification = las.classification
-    new_file.scan_angle = las.scan_angle
+    new_file.classification = classification
+    new_file.scan_angle = scan_angle
 
     return new_file
 
 
 def separate_by_classification(
-    las_data: laspy.LasData,
-    classes: dict = LAS_CLASSIFICATION
+    las_data: laspy.LasData, classes: dict = LAS_CLASSIFICATION
 ) -> dict:
     """
     Separate LAS data by classification codes.
@@ -102,8 +105,7 @@ def separate_by_classification(
     for name, codes in classes.items():
         mask = np.array([c in codes for c in las_data.classification])
         filtered = laspy.create(
-            point_format=las_data.point_format,
-            file_version=las_data.header.version
+            point_format=las_data.point_format, file_version=las_data.header.version
         )
         filtered.points = las_data.points[mask]
         result[name] = filtered
@@ -111,10 +113,7 @@ def separate_by_classification(
 
 
 def process_las_file(
-    las_path: Path,
-    proj_fname: str,
-    subset_geojson: str,
-    target_dir: Path
+    las_path: Path, proj_fname: str, subset_geojson: str, target_dir: Path
 ) -> dict:
     """
     Process a single LAS file - transform and separate by classification.
@@ -124,6 +123,8 @@ def process_las_file(
         proj_fname: Path to projection file
         subset_geojson: Path to influence region GeoJSON
         target_dir: Output directory
+    except AttributeError:
+        new_file.scan_angle = np.zeros(x.shape)
 
     Returns:
         Dict with paths to output files
@@ -199,6 +200,7 @@ def merge_las_files(
             continue
 
         import numpy as np
+
         merged_points = np.concatenate(all_points)
 
         if sample_fraction < 1.0:
@@ -223,7 +225,7 @@ def process_las_parallel(
     proj_fname: str,
     subset_geojson: str,
     target_dir: str,
-    num_workers: int = 4
+    num_workers: int = 4,
 ) -> list:
     """
     Process multiple LAS files in parallel.
@@ -247,10 +249,12 @@ def process_las_parallel(
     las_files = list(source_dir.glob("*.las"))
 
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        results = list(executor.map(
-            lambda f: process_las_file(f, proj_fname, subset_geojson, target_path),
-            las_files
-        ))
+        results = list(
+            executor.map(
+                lambda f: process_las_file(f, proj_fname, subset_geojson, target_path),
+                las_files,
+            )
+        )
 
     return results
 
@@ -260,10 +264,14 @@ if __name__ == "__main__":
         description="Transform LAS files and separate by classification"
     )
     parser.add_argument("--proj_fname", "-p", default="proj4str.txt")
-    parser.add_argument("--source_las", required=True,
-                        help="Directory with LAS files or single file path")
-    parser.add_argument("--subset_geojson", required=True,
-                        help="Path to influence region GeoJSON")
+    parser.add_argument(
+        "--source_las",
+        required=True,
+        help="Directory with LAS files or single file path",
+    )
+    parser.add_argument(
+        "--subset_geojson", required=True, help="Path to influence region GeoJSON"
+    )
     parser.add_argument("--target_dir", default="./results")
     parser.add_argument("--num_workers", type=int, default=4)
 
@@ -277,7 +285,7 @@ if __name__ == "__main__":
             args.proj_fname,
             args.subset_geojson,
             args.target_dir,
-            args.num_workers
+            args.num_workers,
         )
         print(f"Processed {len(results)} files")
     else:
@@ -285,6 +293,7 @@ if __name__ == "__main__":
         for subdir in ["ground_las", "building_las", "vegetation_las", "water_las"]:
             (target_dir / subdir).mkdir(parents=True, exist_ok=True)
 
-        result = process_las_file(source_path, args.proj_fname,
-                                   args.subset_geojson, target_dir)
+        result = process_las_file(
+            source_path, args.proj_fname, args.subset_geojson, target_dir
+        )
         print(f"Processed: {result}")
