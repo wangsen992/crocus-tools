@@ -7,7 +7,7 @@ Voxelizes vegetation point clouds and computes LAD using Beer-Lambert law.
 import numpy as np
 import laspy
 from pathlib import Path
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, process
 from typing import Tuple, List
 
 
@@ -55,8 +55,9 @@ def voxelize(ar: np.ndarray, bottom: np.ndarray, vwidth: float) -> Tuple:
     return vx, vy, vz, vcnt, vbcnt
 
 
-def compute_lad(vcnt: np.ndarray, vbcnt: np.ndarray, vwidth: float,
-                k: float = 0.5) -> np.ndarray:
+def compute_lad(
+    vcnt: np.ndarray, vbcnt: np.ndarray, vwidth: float, k: float = 0.5
+) -> np.ndarray:
     """
     Compute Leaf Area Density using Beer-Lambert theory.
 
@@ -81,12 +82,19 @@ def compute_lad(vcnt: np.ndarray, vbcnt: np.ndarray, vwidth: float,
 
 def to_openfoam_list(name: str, list_data: List[str]) -> str:
     """Format list data as OpenFOAM nonuniform list."""
-    return f"{name} nonuniform {len(list_data)}\n" + \
-           "(\n\t" + "\n\t".join(list_data) + "\n);"
+    return (
+        f"{name} nonuniform {len(list_data)}\n"
+        + "(\n\t"
+        + "\n\t".join(list_data)
+        + "\n);"
+    )
 
 
-def write_lad_openfoam(points_list: List[str], lad_list: List[str],
-                       output_path: str = "constant/urban/point_data/lad"):
+def write_lad_openfoam(
+    points_list: List[str],
+    lad_list: List[str],
+    output_path: str = "constant/urban/point_data/lad",
+):
     """Write LAD data in OpenFOAM dictionary format."""
     header = """
     FoamFile
@@ -105,7 +113,7 @@ def write_lad_openfoam(points_list: List[str], lad_list: List[str],
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path, 'w', buffering=8192) as f:
+    with open(output_path, "w", buffering=8192) as f:
         f.write(header)
         f.write(dimension_entry)
         f.write(points_entry)
@@ -114,8 +122,9 @@ def write_lad_openfoam(points_list: List[str], lad_list: List[str],
     print(f"LAD written to {output_path}")
 
 
-def process_vegetation_file(veg_path: Path, gnd_path: Path,
-                            spacing: float = 0.5) -> Tuple[List[str], List[str]]:
+def process_vegetation_file(
+    veg_path: Path, gnd_path: Path, spacing: float = 0.5
+) -> Tuple[List[str], List[str]]:
     """
     Process a single vegetation LAS file with corresponding ground file.
 
@@ -152,13 +161,23 @@ def process_vegetation_file(veg_path: Path, gnd_path: Path,
             for k in range(z.size - 1):
                 if lad[i, j, k] > 0:
                     points_list.append(f"({x[i]:6.2f} {y[j]:6.2f} {z[k]:6.2f})")
-                    lad_list.append(f"{lad[i,j,k]:4.2f}")
+                    lad_list.append(f"{lad[i, j, k]:4.2f}")
 
     return points_list, lad_list
 
 
-def voxelize_las(veg_dir: str, gnd_dir: str, output: str = None,
-                 num_workers: int = 4, spacing: float = 0.5):
+def _process_file_worker(args):
+    veg_file, gnd_file, spacing = args
+    return process_vegetation_file(veg_file, gnd_file, spacing)
+
+
+def voxelize_las(
+    veg_dir: str,
+    gnd_dir: str,
+    output: str = None,
+    num_workers: int = 4,
+    spacing: float = 0.5,
+):
     """
     Convert LiDAR vegetation points to OpenFOAM LAD format.
 
@@ -180,21 +199,21 @@ def voxelize_las(veg_dir: str, gnd_dir: str, output: str = None,
 
     veg_files = sorted(veg_dir.glob("*_veg.las"))
 
+    tasks = []
+    for veg_file in veg_files:
+        prefix = veg_file.stem.split("_veg")[0]
+        gnd_file = gnd_dir / f"{prefix}_ground.las"
+
+        if not gnd_file.exists():
+            print(f"Warning: No ground file for {veg_file}")
+            continue
+
+        tasks.append((veg_file, gnd_file, spacing))
+
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        for veg_file in veg_files:
-            prefix = veg_file.stem.split("_veg")[0]
-            gnd_file = gnd_dir / f"{prefix}_ground.las"
-
-            if not gnd_file.exists():
-                print(f"Warning: No ground file for {veg_file}")
-                continue
-
-            for pl, ll in [executor.map(
-                lambda f: process_vegetation_file(f, gnd_file, spacing),
-                [veg_file]
-            )]:
-                points_list.extend(pl)
-                lad_list.extend(ll)
+        for pl, ll in executor.map(_process_file_worker, tasks):
+            points_list.extend(pl)
+            lad_list.extend(ll)
 
     write_lad_openfoam(points_list, lad_list, output)
 
@@ -207,17 +226,27 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Convert LiDAR vegetation to OpenFOAM LAD"
     )
-    parser.add_argument("--veg_dir", default="ppcfd_results/vegetation_las",
-                        help="Directory with vegetation LAS files")
-    parser.add_argument("--gnd_dir", default="ppcfd_results/ground_las",
-                        help="Directory with ground LAS files")
-    parser.add_argument("--output", default="constant/urban/point_data/lad",
-                        help="Output path")
+    parser.add_argument(
+        "--veg_dir",
+        default="ppcfd_results/vegetation_las",
+        help="Directory with vegetation LAS files",
+    )
+    parser.add_argument(
+        "--gnd_dir",
+        default="ppcfd_results/ground_las",
+        help="Directory with ground LAS files",
+    )
+    parser.add_argument(
+        "--output", default="constant/urban/point_data/lad", help="Output path"
+    )
     parser.add_argument("--num_workers", type=int, default=4)
-    parser.add_argument("--spacing", type=float, default=0.5,
-                        help="Voxel spacing in meters")
+    parser.add_argument(
+        "--spacing", type=float, default=0.5, help="Voxel spacing in meters"
+    )
 
     args = parser.parse_args()
 
-    voxelize_las(args.veg_dir, args.gnd_dir, args.output,
-                 args.num_workers, args.spacing)
+    voxelize_las(
+        args.veg_dir, args.gnd_dir, args.output, args.num_workers, args.spacing
+    )
+
