@@ -47,8 +47,7 @@ def subset_building_footprints(
 
     gdf = gpd.read_file(source_bldfprt)
     gdf = gpd.GeoDataFrame(
-        geometry=gpd.GeoSeries.from_wkt(gdf['the_geom'], crs='latlon'),
-        data=gdf
+        geometry=gpd.GeoSeries.from_wkt(gdf["geometry"], crs="latlon"), data=gdf
     )
     gdf = gdf.set_crs("latlon")
 
@@ -84,3 +83,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
